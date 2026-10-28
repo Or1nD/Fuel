@@ -152,12 +152,13 @@ const store = {
   set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
   del(k){ try { localStorage.removeItem(k); } catch {} }
 };
-let data = store.get("fuel.data", { goals:{kcal:2200, protein:150}, meals:[], lib:[], model:"gemini-2.5-flash" });
+let data = store.get("fuel.data", { goals:{kcal:2200, protein:150}, meals:[], lib:[], model:"gemini-3.8-flash" });
 data.lib = data.lib || [];
 let apiKey = store.get("fuel.key", "");
 const save = () => { if (!store.set("fuel.data", data)) alert("Couldn't save: phone storage is full. Export your data, then delete some food photos."); };
-const DEFAULT_MODEL = "gemini-2.5-flash";
-const modelName = () => (!data.model || /claude/i.test(data.model)) ? DEFAULT_MODEL : data.model;
+const DEFAULT_MODEL = "gemini-3.8-flash";
+const FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite"];
+const modelName = () => (!data.model || /claude/i.test(data.model) || data.model === "gemini-2.5-flash") ? DEFAULT_MODEL : data.model;
 
 // ---- day navigation ----
 const dkey = d => { const z = new Date(d.getTime() - d.getTimezoneOffset()*6e4); return z.toISOString().slice(0,10); };
@@ -305,7 +306,7 @@ $("analyze").onclick = async () => {
         parts.push({ text: `Reference photo of known food #${l.id} (${l.name}):` }, { inline_data:{ mime_type:"image/jpeg", data:l.photo } });
       }
       parts.push({ text: "Now analyze this photo:" }, { inline_data:{ mime_type:"image/jpeg", data:imgData } });
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName()}:generateContent`, {
+      const call = async model => { const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method:"POST",
         headers:{"content-type":"application/json","x-goog-api-key":apiKey},
         body: JSON.stringify({
@@ -314,7 +315,17 @@ $("analyze").onclick = async () => {
         })
       });
       const j = await r.json();
-      if (!r.ok) throw new Error(j.error?.message || ("HTTP " + r.status));
+      if (!r.ok) { const e = new Error(j.error?.message || ("HTTP " + r.status)); e.status = r.status; throw e; }
+      return j; };
+      let j, lastErr;
+      for (const m of [modelName(), ...FALLBACK_MODELS.filter(x => x !== modelName())]) {
+        try { j = await call(m); break; }
+        catch (e) {
+          lastErr = e;
+          if (![404, 429].includes(e.status) && !/no longer available|not found|not supported|quota|exhausted/i.test(e.message)) throw e;
+        }
+      }
+      if (!j) throw lastErr;
       const txt = (j.candidates?.[0]?.content?.parts||[]).map(b => b.text||"").join("");
       if (!txt) throw new Error("The model returned no answer. Try another photo.");
       const m = txt.match(/\{[\s\S]*\}/); if (!m) throw new Error("Unexpected response from the model.");
