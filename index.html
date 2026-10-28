@@ -258,7 +258,7 @@ $("file").onchange = async e => {
   $("scanPart").hidden = false; $("resultPart").hidden = true;
   setAnalyze(false); open("addSheet");
 };
-function shrink(file, max = 1280, q = .85){
+function shrink(file, max = 1024, q = .8){
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(file), img = new Image();
     img.onload = () => {
@@ -279,6 +279,14 @@ function setAnalyze(busy){
 const PROMPT = `You are a nutrition estimator. Identify each distinct food or drink in this photo, estimate its portion size, and estimate calories (kcal) and protein (grams) for that portion. Be realistic, and account for visible cooking oil, sauces and so on. Respond with ONLY JSON, no prose, in exactly this shape:
 {"meal":"short meal name","items":[{"name":"food","portion":"e.g. ~150 g","kcal":0,"protein":0,"known":null}]}`;
 const REF_PHOTOS = 12;
+async function gfetch(url, opts){
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 45000);
+  try { return await fetch(url, { ...opts, signal: ctl.signal }); }
+  catch (e) {
+    const err = new Error(e.name === "AbortError" ? "Google took too long to answer. Try again." : "Couldn't reach Google. Check your connection, and turn off any VPN or content blocker for this site.");
+    err.status = 0; throw err;
+  } finally { clearTimeout(t); }
+}
 function libContext(){
   if (!data.lib.length) return { text:"", photos:[] };
   const list = data.lib.map(l => `#${l.id} ${l.name} | serving: ${l.serving || "1 serving"} | ${l.kcal} kcal | ${l.protein} g protein`).join("\n");
@@ -306,7 +314,7 @@ $("analyze").onclick = async () => {
         parts.push({ text: `Reference photo of known food #${l.id} (${l.name}):` }, { inline_data:{ mime_type:"image/jpeg", data:l.photo } });
       }
       parts.push({ text: "Now analyze this photo:" }, { inline_data:{ mime_type:"image/jpeg", data:imgData } });
-      const call = async model => { const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      const call = async model => { const r = await gfetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method:"POST",
         headers:{"content-type":"application/json","x-goog-api-key":apiKey},
         body: JSON.stringify({
@@ -314,7 +322,7 @@ $("analyze").onclick = async () => {
           generationConfig:{responseMimeType:"application/json", temperature:0.2}
         })
       });
-      const j = await r.json();
+      const j = await r.json().catch(() => ({}));
       if (!r.ok) { const e = new Error(j.error?.message || ("HTTP " + r.status)); e.status = r.status; throw e; }
       return j; };
       let j, lastErr;
@@ -325,11 +333,11 @@ $("analyze").onclick = async () => {
           try { j = await call(m); break; }
           catch (e) {
             lastErr = e;
-            if (![404, 429, 500, 502, 503, 504].includes(e.status) && !/no longer available|not found|not supported|quota|exhausted|high demand|overloaded|unavailable/i.test(e.message)) throw e;
+            if (![0, 404, 429, 500, 502, 503, 504].includes(e.status) && !/no longer available|not found|not supported|quota|exhausted|high demand|overloaded|unavailable/i.test(e.message)) throw e;
           }
         }
       }
-      if (!j) throw new Error("Google's AI is busy right now. Wait a minute and try again. (" + lastErr.message + ")");
+      if (!j) throw lastErr.status === 0 ? lastErr : new Error("Google's AI is busy right now. Wait a minute and try again. (" + lastErr.message + ")");
       const txt = (j.candidates?.[0]?.content?.parts||[]).map(b => b.text||"").join("");
       if (!txt) throw new Error("The model returned no answer. Try another photo.");
       const m = txt.match(/\{[\s\S]*\}/); if (!m) throw new Error("Unexpected response from the model.");
