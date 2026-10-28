@@ -318,14 +318,18 @@ $("analyze").onclick = async () => {
       if (!r.ok) { const e = new Error(j.error?.message || ("HTTP " + r.status)); e.status = r.status; throw e; }
       return j; };
       let j, lastErr;
-      for (const m of [modelName(), ...FALLBACK_MODELS.filter(x => x !== modelName())]) {
-        try { j = await call(m); break; }
-        catch (e) {
-          lastErr = e;
-          if (![404, 429].includes(e.status) && !/no longer available|not found|not supported|quota|exhausted/i.test(e.message)) throw e;
+      const models = [modelName(), ...FALLBACK_MODELS.filter(x => x !== modelName())];
+      for (let round = 0; round < 2 && !j; round++) {
+        if (round) { $("analyze").innerHTML = '<span class="spin"></span>Busy, retrying…'; await new Promise(r => setTimeout(r, 3000)); }
+        for (const m of models) {
+          try { j = await call(m); break; }
+          catch (e) {
+            lastErr = e;
+            if (![404, 429, 500, 502, 503, 504].includes(e.status) && !/no longer available|not found|not supported|quota|exhausted|high demand|overloaded|unavailable/i.test(e.message)) throw e;
+          }
         }
       }
-      if (!j) throw lastErr;
+      if (!j) throw new Error("Google's AI is busy right now. Wait a minute and try again. (" + lastErr.message + ")");
       const txt = (j.candidates?.[0]?.content?.parts||[]).map(b => b.text||"").join("");
       if (!txt) throw new Error("The model returned no answer. Try another photo.");
       const m = txt.match(/\{[\s\S]*\}/); if (!m) throw new Error("Unexpected response from the model.");
