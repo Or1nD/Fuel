@@ -32,7 +32,7 @@ header h1{font-size:20px;margin:0}
 .bar{height:10px;border-radius:99px;background:var(--line);overflow:hidden;margin:8px 0 14px}
 .bar:last-child{margin-bottom:0}
 .bar i{display:block;height:100%;border-radius:99px;transition:width .3s}
-.actions{display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:12px}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
 .btn{border:1px solid var(--line);background:var(--card);border-radius:14px;padding:14px;font-weight:600;text-align:center}
 .btn.primary{background:var(--accent);color:var(--accent-text);border-color:transparent;font-size:17px}
 .btn.danger{color:var(--danger)}
@@ -59,6 +59,12 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
 @keyframes s{to{transform:rotate(360deg)}}
 .empty{text-align:center;padding:28px 0}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.food{display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.thumb{width:48px;height:48px;border-radius:10px;object-fit:cover;background:var(--line);flex:none;display:flex;align-items:center;justify-content:center}
+.draft{border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:10px;background:var(--card)}
+.draft .f{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+.draft .x{background:none;border:0;color:var(--danger);font-size:18px}
+.item .small{grid-column:1/-1;text-align:left;font-size:13px;color:var(--accent);background:none;border:0;padding:2px 0 6px;font-weight:600}
 </style>
 </head>
 <body>
@@ -76,8 +82,9 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
 </div>
 
 <div class="actions">
-  <button class="btn primary" id="scanBtn">📷 Scan food</button>
+  <button class="btn primary" id="scanBtn" style="grid-column:1/-1">📷 Scan food</button>
   <button class="btn" id="manualBtn">+ Manual</button>
+  <button class="btn" id="libBtn">★ My foods</button>
 </div>
 <input type="file" id="file" accept="image/*" capture="environment" hidden>
 
@@ -102,6 +109,18 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
     <div class="row between" style="margin:14px 0 4px"><b>Total</b><b id="sheetTotal"></b></div>
     <button class="btn primary" id="saveMeal" style="width:100%;margin-top:8px">Add to log</button>
   </div>
+</div></div>
+
+<!-- Food library sheet -->
+<div class="sheet" id="libSheet"><div class="panel">
+  <div class="row between"><h2>My foods</h2><button class="icon" data-close>✕</button></div>
+  <div class="muted" style="margin:6px 0 10px">Everything saved here is sent to the AI with each scan, so it uses your exact numbers. Photos help it recognise your meals.</div>
+  <div class="grid2"><button class="btn" id="libAddPhotos">📷 Add with photos</button><button class="btn" id="libAddBlank">+ Add food</button></div>
+  <input type="file" id="libFiles" accept="image/*" multiple hidden>
+  <div id="drafts"></div>
+  <button class="btn primary" id="saveDrafts" style="width:100%;margin-top:10px" hidden>Save to my foods</button>
+  <input type="text" id="libSearch" placeholder="Search your foods" style="margin-top:14px">
+  <div id="libList" style="margin-top:10px"></div>
 </div></div>
 
 <!-- Settings sheet -->
@@ -130,12 +149,13 @@ const num = v => Math.max(0, Math.round(parseFloat(v) || 0));
 // ---- storage (every access guarded) ----
 const store = {
   get(k, d){ try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
   del(k){ try { localStorage.removeItem(k); } catch {} }
 };
-let data = store.get("fuel.data", { goals:{kcal:2200, protein:150}, meals:[], model:"gemini-2.5-flash" });
+let data = store.get("fuel.data", { goals:{kcal:2200, protein:150}, meals:[], lib:[], model:"gemini-2.5-flash" });
+data.lib = data.lib || [];
 let apiKey = store.get("fuel.key", "");
-const save = () => store.set("fuel.data", data);
+const save = () => { if (!store.set("fuel.data", data)) alert("Couldn't save: phone storage is full. Export your data, then delete some food photos."); };
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const modelName = () => (!data.model || /claude/i.test(data.model)) ? DEFAULT_MODEL : data.model;
 
@@ -188,7 +208,8 @@ function drawRows(){
     <input class="nm" type="text" value="${esc(it.name)}" data-i="${i}" data-f="name" placeholder="Food">
     <input type="number" inputmode="numeric" value="${it.kcal}" data-i="${i}" data-f="kcal" style="grid-column:2">
     <input type="number" inputmode="numeric" value="${it.protein}" data-i="${i}" data-f="protein">
-    <button class="x" data-rm="${i}" aria-label="Remove">✕</button></div>`).join("");
+    <button class="x" data-rm="${i}" aria-label="Remove">✕</button>
+    ${it.known ? `<div class="muted" style="grid-column:1/-1;font-size:12px">✓ matched to your foods</div>` : `<button class="small" data-save="${i}">☆ Save to my foods</button>`}</div>`).join("");
   // portion hint under name
   document.querySelectorAll("#itemRows .item").forEach((el,i)=>{
     if (items[i].portion) { const p = document.createElement("div"); p.className="muted"; p.style.cssText="grid-column:1/-1;margin-top:-4px;font-size:12px"; p.textContent = items[i].portion; el.insertBefore(p, el.children[1]); }
@@ -203,16 +224,27 @@ $("itemRows").oninput = e => {
   items[i][t.dataset.f] = t.dataset.f === "name" ? t.value : num(t.value);
   totals();
 };
-$("itemRows").onclick = e => { const r = e.target.dataset.rm; if (r != null) { items.splice(+r,1); drawRows(); } };
+$("itemRows").onclick = async e => {
+  const r = e.target.dataset.rm;
+  if (r != null) { items.splice(+r,1); drawRows(); return; }
+  const s = e.target.dataset.save;
+  if (s != null) {
+    const it = items[+s]; if (!it.name.trim()) { alert("Give it a name first."); return; }
+    const photo = imgData && items.length === 1 ? await thumbFromB64(imgData) : "";
+    it.known = upsertFood({ name:it.name.trim(), serving:it.portion || "1 serving", kcal:num(it.kcal), protein:num(it.protein), photo });
+    drawRows();
+  }
+};
 $("addRow").onclick = () => { items.push({name:"",portion:"",kcal:0,protein:0}); drawRows(); };
 $("saveMeal").onclick = () => {
+  items.forEach(i => { const l = data.lib.find(x => x.id === i.known); if (l) { l.uses = (l.uses||0) + 1; l.last = Date.now(); } });
   const clean = items.filter(i => i.name.trim() || i.kcal || i.protein).map(i => ({name:i.name.trim()||"Item", kcal:num(i.kcal), protein:num(i.protein)}));
   if (!clean.length) return;
   const k = dkey(day);
   data.meals.push({id:String(Date.now()), date:k, ts:Date.now(), name:$("mealName").value.trim()||"Meal", items:clean});
   save(); render(); $("addSheet").classList.remove("open");
 };
-$("manualBtn").onclick = () => { items = [{name:"",portion:"",kcal:0,protein:0}]; $("addTitle").textContent = "Add manually"; showResult(""); };
+$("manualBtn").onclick = () => { imgData = null; items = [{name:"",portion:"",kcal:0,protein:0}]; $("addTitle").textContent = "Add manually"; showResult(""); };
 
 // ---- scanning ----
 $("scanBtn").onclick = () => $("file").click();
@@ -225,16 +257,16 @@ $("file").onchange = async e => {
   $("scanPart").hidden = false; $("resultPart").hidden = true;
   setAnalyze(false); open("addSheet");
 };
-function shrink(file){
+function shrink(file, max = 1280, q = .85){
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(file), img = new Image();
     img.onload = () => {
-      const s = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const s = Math.min(1, max / Math.max(img.width, img.height));
       const c = document.createElement("canvas");
       c.width = Math.round(img.width*s); c.height = Math.round(img.height*s);
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      res(c.toDataURL("image/jpeg", .85).split(",")[1]);
+      res(c.toDataURL("image/jpeg", q).split(",")[1]);
     };
     img.onerror = rej; img.src = url;
   });
@@ -244,7 +276,14 @@ function setAnalyze(busy){
   $("analyze").innerHTML = busy ? '<span class="spin"></span>Analyzing…' : "Analyze";
 }
 const PROMPT = `You are a nutrition estimator. Identify each distinct food or drink in this photo, estimate its portion size, and estimate calories (kcal) and protein (grams) for that portion. Be realistic, and account for visible cooking oil, sauces and so on. Respond with ONLY JSON, no prose, in exactly this shape:
-{"meal":"short meal name","items":[{"name":"food","portion":"e.g. ~150 g","kcal":0,"protein":0}]}`;
+{"meal":"short meal name","items":[{"name":"food","portion":"e.g. ~150 g","kcal":0,"protein":0,"known":null}]}`;
+const REF_PHOTOS = 12;
+function libContext(){
+  if (!data.lib.length) return { text:"", photos:[] };
+  const list = data.lib.map(l => `#${l.id} ${l.name} | serving: ${l.serving || "1 serving"} | ${l.kcal} kcal | ${l.protein} g protein`).join("\n");
+  const photos = data.lib.filter(l => l.photo).sort((a,b) => (b.uses||0)-(a.uses||0) || (b.last||0)-(a.last||0)).slice(0, REF_PHOTOS);
+  return { photos, text: `\n\nThe user keeps a library of KNOWN FOODS with exact values per stated serving. If something in the photo matches a known food, use that food's exact values scaled to the portion you see, and set "known" to its id number as a string. Otherwise set "known" to null. Known foods:\n${list}` + (photos.length ? "\n\nReference photos of some known foods follow, each labelled with its id." : "") };
+}
 $("analyze").onclick = async () => {
   $("scanErr").textContent = "";
   if (!apiKey) { $("scanErr").textContent = "Add your API key in Settings (⚙︎) first."; return; }
@@ -260,13 +299,17 @@ $("analyze").onclick = async () => {
         {name:"Olive oil",portion:"~1 tbsp",kcal:119,protein:0}]};
     } else {
       const note = $("note").value.trim();
+      const lc = libContext();
+      const parts = [{ text: PROMPT + lc.text + (note ? `\n\nUser note about the meal (trust this for portions/ingredients): ${note}` : "") }];
+      for (const l of lc.photos) {
+        parts.push({ text: `Reference photo of known food #${l.id} (${l.name}):` }, { inline_data:{ mime_type:"image/jpeg", data:l.photo } });
+      }
+      parts.push({ text: "Now analyze this photo:" }, { inline_data:{ mime_type:"image/jpeg", data:imgData } });
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName()}:generateContent`, {
         method:"POST",
         headers:{"content-type":"application/json","x-goog-api-key":apiKey},
         body: JSON.stringify({
-          contents:[{parts:[
-            {text: PROMPT + (note ? `\n\nUser note about the meal (trust this for portions/ingredients): ${note}` : "")},
-            {inline_data:{mime_type:"image/jpeg",data:imgData}}]}],
+          contents:[{parts}],
           generationConfig:{responseMimeType:"application/json", temperature:0.2}
         })
       });
@@ -277,12 +320,90 @@ $("analyze").onclick = async () => {
       const m = txt.match(/\{[\s\S]*\}/); if (!m) throw new Error("Unexpected response from the model.");
       out = JSON.parse(m[0]);
     }
-    items = (out.items||[]).map(i => ({name:String(i.name||""), portion:String(i.portion||""), kcal:num(i.kcal), protein:num(i.protein)}));
+    items = (out.items||[]).map(i => ({name:String(i.name||""), portion:String(i.portion||""), kcal:num(i.kcal), protein:num(i.protein),
+      known: data.lib.some(l => l.id === String(i.known)) ? String(i.known) : null}));
     if (!items.length) throw new Error("No food detected. Try a clearer photo.");
     showResult(out.meal || "");
   } catch (err) {
     $("scanErr").textContent = err.message || "Something went wrong.";
   } finally { setAnalyze(false); }
+};
+
+// ---- food library ----
+const nid = () => String(Math.max(0, ...data.lib.map(l => +l.id || 0)) + 1);
+function thumbFromB64(b64){
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 256 / Math.max(img.width, img.height)), c = document.createElement("canvas");
+      c.width = Math.round(img.width*s); c.height = Math.round(img.height*s);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      res(c.toDataURL("image/jpeg", .6).split(",")[1]);
+    };
+    img.onerror = () => res(""); img.src = "data:image/jpeg;base64," + b64;
+  });
+}
+function upsertFood(f){
+  const old = data.lib.find(l => l.name.toLowerCase() === f.name.toLowerCase());
+  if (old) { Object.assign(old, { serving:f.serving, kcal:f.kcal, protein:f.protein }); if (f.photo) old.photo = f.photo; save(); return old.id; }
+  const e = { id:nid(), uses:0, last:0, photo:"", ...f };
+  data.lib.push(e); save(); return e.id;
+}
+let drafts = [];
+function drawDrafts(){
+  $("drafts").innerHTML = drafts.map((d,i) => `<div class="draft">
+    <div class="row">${d.photo ? `<img class="thumb" src="data:image/jpeg;base64,${d.photo}" alt="">` : ""}
+      <input type="text" data-d="${i}" data-f="name" value="${esc(d.name)}" placeholder="Food name">
+      <button class="x" data-drm="${i}" aria-label="Remove">✕</button></div>
+    <div class="f"><input type="text" style="grid-column:1/-1" data-d="${i}" data-f="serving" value="${esc(d.serving)}" placeholder="Serving (e.g. 1 bowl, 200 g)">
+      <input type="number" inputmode="numeric" data-d="${i}" data-f="kcal" value="${d.kcal || ""}" placeholder="kcal">
+      <input type="number" inputmode="numeric" data-d="${i}" data-f="protein" value="${d.protein || ""}" placeholder="protein (g)"></div></div>`).join("");
+  $("saveDrafts").hidden = !drafts.length;
+}
+function drawLib(){
+  const q = $("libSearch").value.trim().toLowerCase();
+  const list = data.lib.filter(l => !q || l.name.toLowerCase().includes(q)).sort((a,b) => a.name.localeCompare(b.name));
+  $("libList").innerHTML = list.length ? list.map(l => `<div class="food">
+    ${l.photo ? `<img class="thumb" src="data:image/jpeg;base64,${l.photo}" alt="">` : `<div class="thumb">🍽</div>`}
+    <div style="flex:1;min-width:0"><b>${esc(l.name)}</b><div class="muted">${esc(l.serving)} · ${l.kcal} kcal · ${l.protein} g</div></div>
+    <button class="btn" data-log="${l.id}" style="padding:8px 12px">Log</button>
+    <button class="del" data-ldel="${l.id}" aria-label="Delete">✕</button></div>`).join("")
+    : `<div class="muted empty">${data.lib.length ? "No match." : "Nothing saved yet."}</div>`;
+  const withPhoto = data.lib.filter(l => l.photo).length;
+  $("libSearch").placeholder = `Search your foods (${data.lib.length} saved, ${withPhoto} with photos)`;
+}
+$("libBtn").onclick = () => { drawDrafts(); drawLib(); open("libSheet"); };
+$("libSearch").oninput = drawLib;
+$("libAddBlank").onclick = () => { drafts.push({ name:"", serving:"", kcal:0, protein:0, photo:"" }); drawDrafts(); };
+$("libAddPhotos").onclick = () => $("libFiles").click();
+$("libFiles").onchange = async e => {
+  const files = [...e.target.files]; e.target.value = "";
+  for (const f of files) {
+    try { drafts.push({ name:"", serving:"", kcal:0, protein:0, photo: await shrink(f, 256, .6) }); } catch {}
+  }
+  drawDrafts();
+};
+$("drafts").oninput = e => {
+  const t = e.target, i = t.dataset.d; if (i == null) return;
+  drafts[i][t.dataset.f] = (t.dataset.f === "name" || t.dataset.f === "serving") ? t.value : num(t.value);
+};
+$("drafts").onclick = e => { const r = e.target.dataset.drm; if (r != null) { drafts.splice(+r, 1); drawDrafts(); } };
+$("saveDrafts").onclick = () => {
+  const ok = drafts.filter(d => d.name.trim());
+  if (!ok.length) { alert("Give each food a name."); return; }
+  ok.forEach(d => upsertFood({ name:d.name.trim(), serving:d.serving.trim() || "1 serving", kcal:num(d.kcal), protein:num(d.protein), photo:d.photo }));
+  drafts = drafts.filter(d => !d.name.trim()); drawDrafts(); drawLib();
+};
+$("libList").onclick = e => {
+  const lg = e.target.dataset.log, dl = e.target.dataset.ldel;
+  if (lg) {
+    const l = data.lib.find(x => x.id === lg); if (!l) return;
+    l.uses = (l.uses||0) + 1; l.last = Date.now();
+    data.meals.push({ id:String(Date.now()), date:dkey(day), ts:Date.now(), name:l.name, items:[{ name:l.name, kcal:l.kcal, protein:l.protein }] });
+    save(); render(); drawLib(); $("libSheet").classList.remove("open");
+  } else if (dl && confirm("Delete this food from your library?")) {
+    data.lib = data.lib.filter(x => x.id !== dl); save(); drawLib();
+  }
 };
 
 // ---- settings ----
@@ -308,7 +429,7 @@ $("importFile").onchange = async e => {
   try {
     const j = JSON.parse(await f.text());
     if (!Array.isArray(j.meals) || !j.goals) throw 0;
-    if (confirm("Replace current data with this backup?")) { data = j; save(); render(); $("setSheet").classList.remove("open"); }
+    if (confirm("Replace current data with this backup?")) { data = j; data.lib = data.lib || []; save(); render(); $("setSheet").classList.remove("open"); }
   } catch { alert("That isn't a valid Fuel backup."); }
 };
 $("wipe").onclick = () => {
