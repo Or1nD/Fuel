@@ -49,7 +49,16 @@ header h1{font-size:20px;margin:0}
 .preview{width:100%;max-height:220px;object-fit:cover;border-radius:12px;margin:12px 0}
 input[type=text],input[type=number],input[type=password]{width:100%;font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;min-width:0}
 label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
-.item{display:grid;grid-template-columns:1fr 64px 64px 28px;gap:6px;align-items:center;margin-bottom:8px}
+.item{display:grid;grid-template-columns:1fr 1fr 1fr 28px;gap:6px;align-items:end;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.item label.num{margin:0;font-size:11px}
+.item label.num span{display:block;margin-bottom:2px}
+.item .hint{grid-column:1/-1;margin-top:-2px;font-size:12px}
+select{width:100%;font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+[hidden]{display:none!important}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{border:1px solid var(--line);background:var(--bg);border-radius:99px;padding:6px 12px;font-size:14px}
+.chip.on{background:var(--accent);color:var(--accent-text);border-color:transparent;font-weight:600}
+.x{background:none;border:0;color:var(--danger);font-size:18px}
 .item .nm{grid-column:1/-1}
 .item .x{background:none;border:0;color:var(--danger);font-size:18px}
 .hdr{display:grid;grid-template-columns:1fr 64px 64px 28px;gap:6px;font-size:12px;color:var(--muted);margin-top:12px}
@@ -95,6 +104,15 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
   <div class="row between"><h2 id="addTitle">Scan food</h2><button class="icon" data-close>✕</button></div>
   <div id="scanPart">
     <img id="preview" class="preview" alt="">
+    <label for="plateSel">Plate or container</label>
+    <select id="plateSel"></select>
+    <label for="scaleSel">Object next to the food for scale</label>
+    <select id="scaleSel"></select>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="photo2Btn" style="flex:1;padding:10px">+ Side-angle photo (shows depth)</button>
+      <img id="preview2" class="thumb" alt="" hidden>
+    </div>
+    <input type="file" id="file2" accept="image/*" capture="environment" hidden>
     <label for="note">Note for the scan (optional)</label>
     <input type="text" id="note" placeholder="e.g. 200g chicken, cooked in olive oil">
     <button class="btn primary" id="analyze" style="width:100%;margin-top:12px">Analyze</button>
@@ -103,7 +121,13 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
   <div id="resultPart" hidden>
     <label for="mealName">Meal name</label>
     <input type="text" id="mealName" placeholder="Lunch">
-    <div class="hdr"><span>Item</span><span>kcal</span><span>protein</span><span></span></div>
+    <div class="card" id="qBox" hidden style="margin-top:12px">
+      <b>Quick questions</b>
+      <div class="muted">Things a photo can't show. Answer to sharpen the estimate.</div>
+      <div id="qList"></div>
+      <button class="btn" id="refine" style="width:100%;margin-top:12px" disabled>Refine estimate</button>
+      <div class="err" id="refineErr"></div>
+    </div>
     <div id="itemRows" style="margin-top:6px"></div>
     <button class="btn" id="addRow" style="width:100%;padding:8px">+ Add item</button>
     <div class="row between" style="margin:14px 0 4px"><b>Total</b><b id="sheetTotal"></b></div>
@@ -131,6 +155,12 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
   <label for="apiKey">Gemini API key (free)</label>
   <input type="password" id="apiKey" placeholder="AIza..." autocomplete="off">
   <div class="muted" style="margin-top:6px">Get a free key at aistudio.google.com → Get API key. Stored only in this browser, never uploaded to GitHub. Type <code>demo</code> to try fake scans without a key.</div>
+  <label>Plates &amp; containers</label>
+  <div class="muted" style="margin-bottom:6px">Measure once with a ruler, or read the volume on the lid. The AI uses these sizes to judge portions.</div>
+  <div id="plateList"></div>
+  <button class="btn" id="addPlate" style="width:100%;padding:8px;margin-top:4px">+ Add plate or container</button>
+  <div class="muted" id="calInfo" style="margin-top:14px"></div>
+  <button class="del" id="resetCal">Reset learned corrections</button>
   <label for="model">Model</label><input type="text" id="model">
   <button class="btn primary" id="saveSet" style="width:100%;margin-top:16px">Save</button>
   <div class="grid2" style="margin-top:16px">
@@ -152,8 +182,23 @@ const store = {
   set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
   del(k){ try { localStorage.removeItem(k); } catch {} }
 };
+const DEFAULT_PLATES = [
+  { id:"p1", name:"Dinner plate", size:"26 cm across" },
+  { id:"p2", name:"Side plate", size:"20 cm across" },
+  { id:"p3", name:"Bowl", size:"450 ml, about 15 cm across" },
+  { id:"p4", name:"Lunch box", size:"900 ml" },
+  { id:"p5", name:"Restaurant plate", size:"30 cm across" }
+];
 let data = store.get("fuel.data", { goals:{kcal:2200, protein:150}, meals:[], lib:[], model:"gemini-3.8-flash" });
-data.lib = data.lib || [];
+function normalize(){
+  data.goals = data.goals || { kcal:2200, protein:150 };
+  data.meals = data.meals || [];
+  data.lib = data.lib || [];
+  data.plates = data.plates || DEFAULT_PLATES.map(p => ({ ...p }));
+  data.cal = data.cal || { k:1, p:1, n:0 };
+  data.last = data.last || { plate:"p1", scale:"" };
+}
+normalize();
 let apiKey = store.get("fuel.key", "");
 const save = () => { if (!store.set("fuel.data", data)) alert("Couldn't save: phone storage is full. Export your data, then delete some food photos."); };
 const DEFAULT_MODEL = "gemini-3.8-flash";
@@ -198,31 +243,41 @@ document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => b.close
 document.querySelectorAll(".sheet").forEach(s => s.addEventListener("click", e => { if (e.target === s) s.classList.remove("open"); }));
 
 // ---- add meal sheet ----
-let items = [], imgData = null;
+let items = [], imgData = null, imgData2 = null, questions = [], answers = {};
+const blankItem = () => ({ name:"", portion:"", grams:0, kcal:0, protein:0, conf:"", known:null, kpg:null, ppg:null, orig:null });
 function showResult(name){
   $("scanPart").hidden = true; $("resultPart").hidden = false;
   $("mealName").value = name || "";
-  drawRows(); open("addSheet");
+  $("refineErr").textContent = "";
+  drawRows(); drawQuestions(); open("addSheet");
 }
 function drawRows(){
   $("itemRows").innerHTML = items.map((it,i)=>`<div class="item">
     <input class="nm" type="text" value="${esc(it.name)}" data-i="${i}" data-f="name" placeholder="Food">
-    <input type="number" inputmode="numeric" value="${it.kcal}" data-i="${i}" data-f="kcal" style="grid-column:2">
-    <input type="number" inputmode="numeric" value="${it.protein}" data-i="${i}" data-f="protein">
+    ${it.portion || it.conf === "low" ? `<div class="muted hint">${esc(it.portion)}${it.conf === "low" ? " · ⚠ low confidence, check this" : ""}</div>` : ""}
+    <label class="num"><span>grams</span><input type="number" inputmode="numeric" value="${it.grams || ""}" data-i="${i}" data-f="grams"></label>
+    <label class="num"><span>kcal</span><input type="number" inputmode="numeric" value="${it.kcal}" data-i="${i}" data-f="kcal"></label>
+    <label class="num"><span>protein g</span><input type="number" inputmode="numeric" value="${it.protein}" data-i="${i}" data-f="protein"></label>
     <button class="x" data-rm="${i}" aria-label="Remove">✕</button>
     ${it.known ? `<div class="muted" style="grid-column:1/-1;font-size:12px">✓ matched to your foods</div>` : `<button class="small" data-save="${i}">☆ Save to my foods</button>`}</div>`).join("");
-  // portion hint under name
-  document.querySelectorAll("#itemRows .item").forEach((el,i)=>{
-    if (items[i].portion) { const p = document.createElement("div"); p.className="muted"; p.style.cssText="grid-column:1/-1;margin-top:-4px;font-size:12px"; p.textContent = items[i].portion; el.insertBefore(p, el.children[1]); }
-  });
   totals();
 }
 function totals(){
   $("sheetTotal").textContent = `${items.reduce((a,i)=>a+i.kcal,0)} kcal · ${items.reduce((a,i)=>a+i.protein,0)} g`;
 }
+// Editing grams rescales kcal and protein; editing kcal or protein re-learns the per-gram values.
 $("itemRows").oninput = e => {
   const t = e.target, i = t.dataset.i; if (i == null) return;
-  items[i][t.dataset.f] = t.dataset.f === "name" ? t.value : num(t.value);
+  const it = items[i], f = t.dataset.f;
+  if (f === "name") { it.name = t.value; return; }
+  it[f] = num(t.value);
+  if (f === "grams") {
+    if (it.kpg != null) {
+      it.kcal = Math.round(it.grams * it.kpg); it.protein = Math.round(it.grams * it.ppg);
+      const row = t.closest(".item");
+      row.querySelector('[data-f="kcal"]').value = it.kcal; row.querySelector('[data-f="protein"]').value = it.protein;
+    }
+  } else if (it.grams > 0) { it.kpg = it.kcal / it.grams; it.ppg = it.protein / it.grams; }
   totals();
 };
 $("itemRows").onclick = async e => {
@@ -233,30 +288,87 @@ $("itemRows").onclick = async e => {
     const it = items[+s]; if (!it.name.trim()) { alert("Give it a name first."); return; }
     const photo = imgData && items.length === 1 ? await thumbFromB64(imgData) : "";
     it.known = upsertFood({ name:it.name.trim(), serving:it.portion || "1 serving", kcal:num(it.kcal), protein:num(it.protein), photo });
+    it.orig = null;
     drawRows();
   }
 };
-$("addRow").onclick = () => { items.push({name:"",portion:"",kcal:0,protein:0}); drawRows(); };
+$("addRow").onclick = () => { items.push(blankItem()); drawRows(); };
 $("saveMeal").onclick = () => {
-  items.forEach(i => { const l = data.lib.find(x => x.id === i.known); if (l) { l.uses = (l.uses||0) + 1; l.last = Date.now(); } });
+  const c = data.cal;
+  items.forEach(i => {
+    const l = data.lib.find(x => x.id === i.known); if (l) { l.uses = (l.uses||0) + 1; l.last = Date.now(); }
+    if (i.orig) { // learn from how much the user corrected the AI
+      const n = Math.min(c.n, 29);
+      if (i.orig.kcal >= 30) c.k = (c.k * n + Math.min(2, Math.max(.5, num(i.kcal) / i.orig.kcal))) / (n + 1);
+      if (i.orig.protein >= 5) c.p = (c.p * n + Math.min(2, Math.max(.5, num(i.protein) / i.orig.protein))) / (n + 1);
+      c.n = n + 1;
+    }
+  });
   const clean = items.filter(i => i.name.trim() || i.kcal || i.protein).map(i => ({name:i.name.trim()||"Item", kcal:num(i.kcal), protein:num(i.protein)}));
   if (!clean.length) return;
   const k = dkey(day);
   data.meals.push({id:String(Date.now()), date:k, ts:Date.now(), name:$("mealName").value.trim()||"Meal", items:clean});
   save(); render(); $("addSheet").classList.remove("open");
 };
-$("manualBtn").onclick = () => { imgData = null; items = [{name:"",portion:"",kcal:0,protein:0}]; $("addTitle").textContent = "Add manually"; showResult(""); };
+$("manualBtn").onclick = () => { imgData = null; imgData2 = null; questions = []; answers = {}; items = [blankItem()]; $("addTitle").textContent = "Add manually"; showResult(""); };
+
+// ---- follow-up questions ----
+function drawQuestions(){
+  $("qBox").hidden = !questions.length;
+  $("qList").innerHTML = questions.map((q,qi) => `<div style="margin-top:10px"><div>${esc(q.q)}</div>
+    <div class="chips">${q.options.map((o,oi) => `<button class="chip ${answers[qi] === o ? "on" : ""}" data-q="${qi}" data-o="${oi}">${esc(o)}</button>`).join("")}</div></div>`).join("");
+  $("refine").disabled = !Object.keys(answers).length;
+}
+$("qList").onclick = e => {
+  const q = e.target.dataset.q; if (q == null) return;
+  answers[q] = questions[q].options[+e.target.dataset.o]; drawQuestions();
+};
+$("refine").onclick = async () => {
+  const answered = questions.map((q,i) => ({ q:q.q, a:answers[i] })).filter(x => x.a);
+  if (!answered.length) return;
+  $("refineErr").textContent = ""; $("refine").disabled = true;
+  $("refine").innerHTML = '<span class="spin"></span>Refining…';
+  try {
+    const prev = { meal:$("mealName").value, items:items.map(i => ({ name:i.name, portion:i.portion, grams:i.grams, kcal:i.kcal, protein:i.protein, known:i.known })) };
+    const out = await runScan({ prev, answers:answered }, () => { $("refine").innerHTML = '<span class="spin"></span>Busy, retrying…'; });
+    const fresh = mapItems(out);
+    if (!fresh.length) throw new Error("The model returned no items. Try again.");
+    items = fresh; questions = []; answers = {};
+    if (out.meal) $("mealName").value = out.meal;
+    drawRows(); drawQuestions();
+  } catch (err) { $("refineErr").textContent = err.message || "Something went wrong."; }
+  finally { $("refine").innerHTML = "Refine estimate"; $("refine").disabled = !Object.keys(answers).length; }
+};
 
 // ---- scanning ----
+const SCALE = { fork:"standard dinner fork (about 19 cm long)", card:"bank card (8.6 × 5.4 cm)", spoon:"tablespoon (about 20 cm long)" };
+function fillSelects(){
+  $("plateSel").innerHTML = `<option value="">Not sure / other</option>` + data.plates.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.size)})</option>`).join("");
+  $("plateSel").value = data.plates.some(p => p.id === data.last.plate) ? data.last.plate : "";
+  $("scaleSel").innerHTML = `<option value="">None</option><option value="fork">Fork</option><option value="card">Bank card</option><option value="spoon">Tablespoon</option>`;
+  $("scaleSel").value = SCALE[data.last.scale] ? data.last.scale : "";
+}
+$("plateSel").onchange = () => { data.last.plate = $("plateSel").value; save(); };
+$("scaleSel").onchange = () => { data.last.scale = $("scaleSel").value; save(); };
 $("scanBtn").onclick = () => $("file").click();
 $("file").onchange = async e => {
   const f = e.target.files[0]; e.target.value = ""; if (!f) return;
   try { imgData = await shrink(f); } catch { alert("Couldn't read that image."); return; }
+  imgData2 = null; questions = []; answers = {};
   $("addTitle").textContent = "Scan food";
   $("preview").src = "data:image/jpeg;base64," + imgData;
+  $("preview2").hidden = true; $("photo2Btn").textContent = "+ Side-angle photo (shows depth)";
   $("note").value = ""; $("scanErr").textContent = "";
+  fillSelects();
   $("scanPart").hidden = false; $("resultPart").hidden = true;
   setAnalyze(false); open("addSheet");
+};
+$("photo2Btn").onclick = () => $("file2").click();
+$("file2").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  try { imgData2 = await shrink(f); } catch { alert("Couldn't read that image."); return; }
+  $("preview2").src = "data:image/jpeg;base64," + imgData2; $("preview2").hidden = false;
+  $("photo2Btn").textContent = "✓ Side photo added (tap to replace)";
 };
 function shrink(file, max = 1024, q = .8){
   return new Promise((res, rej) => {
@@ -272,12 +384,18 @@ function shrink(file, max = 1024, q = .8){
     img.onerror = rej; img.src = url;
   });
 }
-function setAnalyze(busy){
+function setAnalyze(busy, msg){
   $("analyze").disabled = busy;
-  $("analyze").innerHTML = busy ? '<span class="spin"></span>Analyzing…' : "Analyze";
+  $("analyze").innerHTML = busy ? `<span class="spin"></span>${msg || "Analyzing…"}` : "Analyze";
 }
-const PROMPT = `You are a nutrition estimator. Identify each distinct food or drink in this photo, estimate its portion size, and estimate calories (kcal) and protein (grams) for that portion. Be realistic, and account for visible cooking oil, sauces and so on. Respond with ONLY JSON, no prose, in exactly this shape:
-{"meal":"short meal name","items":[{"name":"food","portion":"e.g. ~150 g","kcal":0,"protein":0,"known":null}]}`;
+const METHOD = `You are an expert dietitian estimating nutrition from meal photos. Follow this method strictly:
+1. Identify every distinct food and drink, including sauces, oils, dressings, toppings and drinks.
+2. Estimate the weight in grams of each item as served (cooked weight for cooked foods). Use ALL scale information given: the plate or container size, any reference object, a second side-angle photo for depth, and the user's note. If the user states a weight or amount, use it exactly. Judge the depth and height of the food, not just its area. People tend to underestimate portions, so do not under-count.
+3. Calculate kcal and protein as grams times standard nutrition values per 100 g for the food as prepared.
+4. Add typical cooking fat, sugar or sauce when the food is clearly fried, sautéed, roasted, glazed, creamy or dressed, unless the user says otherwise.
+5. If something you cannot see could change the total by more than about 50 kcal (for example oil used, dressing amount, creamy or clear soup, sugar in a drink), add up to 3 short questions with 2 to 4 short answer options each. Otherwise leave "questions" empty.
+Respond with ONLY JSON, no prose, in exactly this shape:
+{"meal":"short name","items":[{"name":"food","portion":"short description","grams":0,"kcal":0,"protein":0,"confidence":"high|medium|low","known":null}],"questions":[{"q":"question","options":["a","b"]}]}`;
 const REF_PHOTOS = 12;
 async function gfetch(url, opts){
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 45000);
@@ -293,59 +411,94 @@ function libContext(){
   const photos = data.lib.filter(l => l.photo).sort((a,b) => (b.uses||0)-(a.uses||0) || (b.last||0)-(a.last||0)).slice(0, REF_PHOTOS);
   return { photos, text: `\n\nThe user keeps a library of KNOWN FOODS with exact values per stated serving. If something in the photo matches a known food, use that food's exact values scaled to the portion you see, and set "known" to its id number as a string. Otherwise set "known" to null. Known foods:\n${list}` + (photos.length ? "\n\nReference photos of some known foods follow, each labelled with its id." : "") };
 }
+function contextText(){
+  const lines = [], note = $("note").value.trim();
+  const pl = data.plates.find(p => p.id === $("plateSel").value);
+  if (pl) lines.push(`The food is on or in: ${pl.name} (${pl.size}). Use this real size to judge portions.`);
+  const sc = SCALE[$("scaleSel").value];
+  if (sc) lines.push(`A ${sc} is visible next to the food as a size reference.`);
+  if (imgData2) lines.push("A second photo taken from a side angle is included to show the depth and height of the food.");
+  if (note) lines.push(`User note (trust this for ingredients and amounts): ${note}`);
+  const c = data.cal;
+  if (c.n >= 5) {
+    const adj = [];
+    if (Math.abs(c.k - 1) > .08) adj.push(`calories ${c.k > 1 ? "higher" : "lower"} by about ${Math.round(Math.abs(c.k - 1) * 100)}%`);
+    if (Math.abs(c.p - 1) > .08) adj.push(`protein ${c.p > 1 ? "higher" : "lower"} by about ${Math.round(Math.abs(c.p - 1) * 100)}%`);
+    if (adj.length) lines.push(`Calibration: across ${c.n} past items the user corrected your estimates ${adj.join(" and ")}. Adjust accordingly.`);
+  }
+  return lines.length ? "\n\n" + lines.join("\n") : "";
+}
+function buildParts(refine){
+  const lc = libContext();
+  const parts = [{ text: METHOD + lc.text + contextText() }];
+  for (const l of lc.photos) parts.push({ text: `Reference photo of known food #${l.id} (${l.name}):` }, { inline_data:{ mime_type:"image/jpeg", data:l.photo } });
+  parts.push({ text: "Main photo to analyze:" }, { inline_data:{ mime_type:"image/jpeg", data:imgData } });
+  if (imgData2) parts.push({ text: "Second photo, side angle:" }, { inline_data:{ mime_type:"image/jpeg", data:imgData2 } });
+  if (refine) parts.push({ text: `Your previous estimate (including any edits by the user):\n${JSON.stringify(refine.prev)}\nThe user answered your questions:\n${refine.answers.map(a => `- ${a.q} -> ${a.a}`).join("\n")}\nUpdate the estimate using these answers. Return the full JSON in the same shape, with "questions" empty.` });
+  return parts;
+}
+async function demoScan(refine){
+  await new Promise(r => setTimeout(r, 900));
+  if (!refine) return { meal:"Chicken rice bowl", items:[
+    { name:"Grilled chicken breast", portion:"~150 g cooked", grams:150, kcal:248, protein:46, confidence:"medium" },
+    { name:"White rice", portion:"~1 cup", grams:160, kcal:205, protein:4, confidence:"high" },
+    { name:"Broccoli", portion:"~80 g", grams:80, kcal:27, protein:2, confidence:"low" }],
+    questions:[{ q:"Was it cooked in oil or butter?", options:["No added fat","About 1 tsp","About 1 tbsp"] }] };
+  const fat = refine.answers[0]?.a || "", extra = /tbsp/.test(fat) ? 119 : /tsp/.test(fat) ? 40 : 0;
+  const its = refine.prev.items.filter(i => i.name !== "Cooking fat");
+  if (extra) its.push({ name:"Cooking fat", portion:fat, grams:extra > 100 ? 14 : 5, kcal:extra, protein:0, confidence:"medium" });
+  return { meal:refine.prev.meal, items:its, questions:[] };
+}
+async function runScan(refine, onRetry){
+  if (apiKey === "demo") return demoScan(refine);
+  const parts = buildParts(refine);
+  const call = async model => {
+    const r = await gfetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method:"POST",
+      headers:{"content-type":"application/json","x-goog-api-key":apiKey},
+      body: JSON.stringify({ contents:[{parts}], generationConfig:{responseMimeType:"application/json", temperature:0.2} })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(j.error?.message || ("HTTP " + r.status)); e.status = r.status; throw e; }
+    return j;
+  };
+  let j, lastErr;
+  const models = [modelName(), ...FALLBACK_MODELS.filter(x => x !== modelName())];
+  for (let round = 0; round < 2 && !j; round++) {
+    if (round) { onRetry && onRetry(); await new Promise(r => setTimeout(r, 3000)); }
+    for (const m of models) {
+      try { j = await call(m); break; }
+      catch (e) {
+        lastErr = e;
+        if (![0, 404, 429, 500, 502, 503, 504].includes(e.status) && !/no longer available|not found|not supported|quota|exhausted|high demand|overloaded|unavailable/i.test(e.message)) throw e;
+      }
+    }
+  }
+  if (!j) throw lastErr.status === 0 ? lastErr : new Error("Google's AI is busy right now. Wait a minute and try again. (" + lastErr.message + ")");
+  const txt = (j.candidates?.[0]?.content?.parts||[]).map(b => b.text||"").join("");
+  if (!txt) throw new Error("The model returned no answer. Try another photo.");
+  const m = txt.match(/\{[\s\S]*\}/); if (!m) throw new Error("Unexpected response from the model.");
+  try { return JSON.parse(m[0]); } catch { throw new Error("Couldn't read the model's answer. Try again."); }
+}
+function mapItems(out){
+  return (out.items || []).map(i => {
+    const kcal = num(i.kcal), protein = num(i.protein), grams = num(i.grams);
+    const known = data.lib.some(l => l.id === String(i.known)) ? String(i.known) : null;
+    return { name:String(i.name||""), portion:String(i.portion||""), grams, kcal, protein, conf:String(i.confidence||"").toLowerCase(), known,
+      kpg: grams ? kcal / grams : null, ppg: grams ? protein / grams : null, orig: known ? null : { kcal, protein } };
+  });
+}
 $("analyze").onclick = async () => {
   $("scanErr").textContent = "";
   if (!apiKey) { $("scanErr").textContent = "Add your API key in Settings (⚙︎) first."; return; }
   setAnalyze(true);
   try {
-    let out;
-    if (apiKey === "demo") {
-      await new Promise(r => setTimeout(r, 900));
-      out = {meal:"Chicken rice bowl", items:[
-        {name:"Grilled chicken breast",portion:"~150 g",kcal:248,protein:46},
-        {name:"White rice",portion:"~1 cup",kcal:205,protein:4},
-        {name:"Broccoli",portion:"~80 g",kcal:27,protein:2},
-        {name:"Olive oil",portion:"~1 tbsp",kcal:119,protein:0}]};
-    } else {
-      const note = $("note").value.trim();
-      const lc = libContext();
-      const parts = [{ text: PROMPT + lc.text + (note ? `\n\nUser note about the meal (trust this for portions/ingredients): ${note}` : "") }];
-      for (const l of lc.photos) {
-        parts.push({ text: `Reference photo of known food #${l.id} (${l.name}):` }, { inline_data:{ mime_type:"image/jpeg", data:l.photo } });
-      }
-      parts.push({ text: "Now analyze this photo:" }, { inline_data:{ mime_type:"image/jpeg", data:imgData } });
-      const call = async model => { const r = await gfetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        method:"POST",
-        headers:{"content-type":"application/json","x-goog-api-key":apiKey},
-        body: JSON.stringify({
-          contents:[{parts}],
-          generationConfig:{responseMimeType:"application/json", temperature:0.2}
-        })
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { const e = new Error(j.error?.message || ("HTTP " + r.status)); e.status = r.status; throw e; }
-      return j; };
-      let j, lastErr;
-      const models = [modelName(), ...FALLBACK_MODELS.filter(x => x !== modelName())];
-      for (let round = 0; round < 2 && !j; round++) {
-        if (round) { $("analyze").innerHTML = '<span class="spin"></span>Busy, retrying…'; await new Promise(r => setTimeout(r, 3000)); }
-        for (const m of models) {
-          try { j = await call(m); break; }
-          catch (e) {
-            lastErr = e;
-            if (![0, 404, 429, 500, 502, 503, 504].includes(e.status) && !/no longer available|not found|not supported|quota|exhausted|high demand|overloaded|unavailable/i.test(e.message)) throw e;
-          }
-        }
-      }
-      if (!j) throw lastErr.status === 0 ? lastErr : new Error("Google's AI is busy right now. Wait a minute and try again. (" + lastErr.message + ")");
-      const txt = (j.candidates?.[0]?.content?.parts||[]).map(b => b.text||"").join("");
-      if (!txt) throw new Error("The model returned no answer. Try another photo.");
-      const m = txt.match(/\{[\s\S]*\}/); if (!m) throw new Error("Unexpected response from the model.");
-      out = JSON.parse(m[0]);
-    }
-    items = (out.items||[]).map(i => ({name:String(i.name||""), portion:String(i.portion||""), kcal:num(i.kcal), protein:num(i.protein),
-      known: data.lib.some(l => l.id === String(i.known)) ? String(i.known) : null}));
+    const out = await runScan(null, () => setAnalyze(true, "Busy, retrying…"));
+    items = mapItems(out);
     if (!items.length) throw new Error("No food detected. Try a clearer photo.");
+    questions = (out.questions || []).filter(q => q && q.q && Array.isArray(q.options) && q.options.length >= 2)
+      .slice(0, 3).map(q => ({ q:String(q.q), options:q.options.slice(0, 4).map(String) }));
+    answers = {};
     showResult(out.meal || "");
   } catch (err) {
     $("scanErr").textContent = err.message || "Something went wrong.";
@@ -430,14 +583,31 @@ $("libList").onclick = e => {
 };
 
 // ---- settings ----
+let platesDraft = [];
+function drawPlates(){
+  $("plateList").innerHTML = platesDraft.map((p,i) => `<div class="row" style="margin-bottom:6px">
+    <input type="text" data-p="${i}" data-f="name" value="${esc(p.name)}" placeholder="Name">
+    <input type="text" data-p="${i}" data-f="size" value="${esc(p.size)}" placeholder="e.g. 26 cm across">
+    <button class="x" data-prm="${i}" aria-label="Remove">✕</button></div>`).join("");
+}
+$("plateList").oninput = e => { const t = e.target, i = t.dataset.p; if (i != null) platesDraft[i][t.dataset.f] = t.value; };
+$("plateList").onclick = e => { const r = e.target.dataset.prm; if (r != null) { platesDraft.splice(+r, 1); drawPlates(); } };
+$("addPlate").onclick = () => { platesDraft.push({ id:"p" + Date.now(), name:"", size:"" }); drawPlates(); };
+function drawCalInfo(){
+  const c = data.cal;
+  $("calInfo").textContent = c.n ? `Learned from ${c.n} corrected items so far: calories ×${c.k.toFixed(2)}, protein ×${c.p.toFixed(2)}. Used once there are 5 or more.` : "The app learns from your corrections. Nothing learned yet.";
+}
+$("resetCal").onclick = () => { data.cal = { k:1, p:1, n:0 }; save(); drawCalInfo(); };
 $("openSettings").onclick = () => {
   $("goalK").value = data.goals.kcal; $("goalP").value = data.goals.protein;
   $("apiKey").value = apiKey; $("model").value = modelName();
+  platesDraft = data.plates.map(p => ({ ...p })); drawPlates(); drawCalInfo();
   open("setSheet");
 };
 $("saveSet").onclick = () => {
   data.goals.kcal = num($("goalK").value) || 2200; data.goals.protein = num($("goalP").value) || 150;
   data.model = $("model").value.trim() || DEFAULT_MODEL;
+  data.plates = platesDraft.filter(p => p.name.trim()).map((p,i) => ({ id:p.id || "p" + Date.now() + i, name:p.name.trim(), size:p.size.trim() || "size unknown" }));
   apiKey = $("apiKey").value.trim(); store.set("fuel.key", apiKey);
   save(); render(); $("setSheet").classList.remove("open");
 };
@@ -452,7 +622,7 @@ $("importFile").onchange = async e => {
   try {
     const j = JSON.parse(await f.text());
     if (!Array.isArray(j.meals) || !j.goals) throw 0;
-    if (confirm("Replace current data with this backup?")) { data = j; data.lib = data.lib || []; save(); render(); $("setSheet").classList.remove("open"); }
+    if (confirm("Replace current data with this backup?")) { data = j; normalize(); save(); render(); $("setSheet").classList.remove("open"); }
   } catch { alert("That isn't a valid Fuel backup."); }
 };
 $("wipe").onclick = () => {
