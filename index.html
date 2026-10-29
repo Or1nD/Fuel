@@ -170,8 +170,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 5px}
   <label for="apiKey">Gemini API key (free)</label>
   <input type="password" id="apiKey" placeholder="AIza..." autocomplete="off">
   <div class="muted" style="margin-top:6px">Get a free key at aistudio.google.com → Get API key. Stored only in this browser, never uploaded to GitHub. Type <code>demo</code> to try fake scans without a key.</div>
-  <label>Plates &amp; containers</label>
-  <div class="muted" style="margin-bottom:6px">Measure once with a ruler, or read the volume on the lid. The AI uses these sizes to judge portions.</div>
+  <label>My plates &amp; containers</label>
+  <div class="muted" style="margin-bottom:6px">50 standard plates are already in the plate list when you scan. Add your own here if yours differ, or for bowls and lunch boxes.</div>
   <div id="plateList"></div>
   <button class="btn" id="addPlate" style="width:100%;padding:8px;margin-top:4px">+ Add plate or container</button>
   <div class="muted" id="calInfo" style="margin-top:14px"></div>
@@ -197,21 +197,34 @@ const store = {
   set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
   del(k){ try { localStorage.removeItem(k); } catch {} }
 };
+const PLATES = [
+  ["Small bread plate","Round",140,140,15],["Small side plate","Round",160,160,18],["Standard side plate","Round",180,180,20],["Large side plate","Round",200,200,22],
+  ["Small dessert plate","Round",170,170,20],["Standard dessert plate","Round",190,190,22],["Large dessert plate","Round",210,210,24],
+  ["Small breakfast plate","Round",190,190,20],["Standard breakfast plate","Round",220,220,23],["Large breakfast plate","Round",240,240,25],
+  ["Small dinner plate","Round",230,230,23],["Standard dinner plate","Round",260,260,25],["Large dinner plate","Round",280,280,28],["Extra-large dinner plate","Round",300,300,30],["Charger plate","Round",330,330,25],
+  ["Small pasta plate","Round, deep",200,200,40],["Standard pasta plate","Round, deep",230,230,45],["Large pasta plate","Round, deep",270,270,50],["Shallow soup plate","Round, deep",210,210,40],["Deep soup plate","Round, deep",230,230,55],
+  ["Small square plate","Square",150,150,18],["Standard square side plate","Square",180,180,20],["Large square plate","Square",250,250,25],["Square dinner plate","Square",270,270,28],["Extra-large square plate","Square",300,300,30],
+  ["Small rectangular plate","Rectangular",200,140,18],["Standard rectangular plate","Rectangular",240,160,20],["Large rectangular plate","Rectangular",300,200,25],["Sushi plate","Rectangular",250,120,18],["Long serving plate","Rectangular",350,150,25],
+  ["Small oval plate","Oval",200,140,20],["Standard oval plate","Oval",250,180,23],["Large oval plate","Oval",300,220,28],["Extra-large oval platter","Oval",350,250,32],["Fish serving plate","Elongated oval",400,180,30],
+  ["Small kids' plate","Round",180,180,20],["Kids' divided plate","Round",220,220,30],["Large kids' plate","Round",240,240,25],["Small compartment plate","Rectangular",220,180,30],["Large compartment plate","Rectangular",280,220,35],
+  ["Small salad plate","Round",200,200,25],["Large salad plate","Round",250,250,30],
+  ["Small tapas plate","Round",120,120,15],["Standard tapas plate","Round",150,150,18],["Small canapé plate","Round",100,100,12],["Large canapé plate","Round",130,130,15],
+  ["Small serving platter","Rectangular",280,180,25],["Medium serving platter","Rectangular",330,230,30],["Large serving platter","Rectangular",400,280,35],["Extra-large serving platter","Rectangular",450,320,40]
+]; // [name, shape, length mm, width mm, height mm]; catalog ids are "c" + 1-based position
+const PLATE_GROUPS = [["Dinner plates",11,15],["Breakfast plates",8,10],["Side, bread & dessert plates",1,7],["Pasta & soup plates (deep)",16,20],["Salad plates",41,42],["Square plates",21,25],["Rectangular & sushi plates",26,30],["Oval plates & platters",31,35],["Kids' plates",36,40],["Serving platters, tapas & canapé",43,50]];
 const DEFAULT_PLATES = [
-  { id:"p1", name:"Dinner plate", size:"26 cm across" },
-  { id:"p2", name:"Side plate", size:"20 cm across" },
   { id:"p3", name:"Bowl", size:"450 ml, about 15 cm across" },
-  { id:"p4", name:"Lunch box", size:"900 ml" },
-  { id:"p5", name:"Restaurant plate", size:"30 cm across" }
+  { id:"p4", name:"Lunch box", size:"900 ml" }
 ];
+const OLD_DEFAULTS = { p1:"26 cm across", p2:"20 cm across", p5:"30 cm across" }; // replaced by the built-in catalog
 let data = store.get("fuel.data", { goals:{kcal:2200, protein:150}, meals:[], lib:[], model:"gemini-3.8-flash" });
 function normalize(){
   data.goals = data.goals || { kcal:2200, protein:150 };
   data.meals = data.meals || [];
   data.lib = data.lib || [];
-  data.plates = data.plates || DEFAULT_PLATES.map(p => ({ ...p }));
+  data.plates = (data.plates || DEFAULT_PLATES.map(p => ({ ...p }))).filter(p => OLD_DEFAULTS[p.id] !== p.size);
   data.cal = data.cal || { k:1, p:1, n:0 };
-  data.last = data.last || { plate:"p1", scale:"" };
+  data.last = data.last || { plate:"c12", scale:"" };
 }
 normalize();
 let apiKey = store.get("fuel.key", "");
@@ -362,9 +375,23 @@ $("refine").onclick = async () => {
 
 // ---- scanning ----
 const SCALE = { fork:"standard dinner fork (about 19 cm long)", card:"bank card (8.6 × 5.4 cm)", spoon:"tablespoon (about 20 cm long)" };
+function plateDim(p){ return p[1].startsWith("Round") ? `${p[2]} mm` : `${p[2]} × ${p[3]} mm`; }
+function plateDesc(id){
+  if (/^c\d+$/.test(id)) {
+    const p = PLATES[+id.slice(1) - 1]; if (!p) return "";
+    return `${p[0]} (${p[1].toLowerCase()}, ${p[1].startsWith("Round") ? p[2] + " mm across" : p[2] + " × " + p[3] + " mm"}, ${p[4]} mm tall)`;
+  }
+  const c = data.plates.find(x => x.id === id); return c ? `${c.name} (${c.size})` : "";
+}
 function fillSelects(){
-  $("plateSel").innerHTML = `<option value="">Not sure / other</option>` + data.plates.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.size)})</option>`).join("");
-  $("plateSel").value = data.plates.some(p => p.id === data.last.plate) ? data.last.plate : "";
+  const opt = (id, label) => `<option value="${esc(id)}">${esc(label)}</option>`;
+  let html = `<option value="">Not sure / other</option>`;
+  PLATE_GROUPS.forEach(([label, from, to]) => {
+    html += `<optgroup label="${esc(label)}">` + PLATES.slice(from - 1, to).map((p, i) => opt("c" + (from + i), `${p[0]} · ${plateDim(p)}`)).join("") + `</optgroup>`;
+  });
+  if (data.plates.length) html += `<optgroup label="My plates & containers">` + data.plates.map(p => opt(p.id, `${p.name} (${p.size})`)).join("") + `</optgroup>`;
+  $("plateSel").innerHTML = html;
+  $("plateSel").value = [...$("plateSel").options].some(o => o.value === data.last.plate) ? data.last.plate : "c12";
   $("scaleSel").innerHTML = `<option value="">None</option><option value="fork">Fork</option><option value="card">Bank card</option><option value="spoon">Tablespoon</option>`;
   $("scaleSel").value = SCALE[data.last.scale] ? data.last.scale : "";
 }
@@ -433,8 +460,8 @@ function libContext(){
 }
 function contextText(){
   const lines = [], note = $("note").value.trim();
-  const pl = data.plates.find(p => p.id === $("plateSel").value);
-  if (pl) lines.push(`The food is on or in: ${pl.name} (${pl.size}). Use this real size to judge portions.`);
+  const pd = plateDesc($("plateSel").value);
+  if (pd) lines.push(`The food is on or in: ${pd}. Use this real size and depth to judge portions: a deep plate holds much more food than a flat one.`);
   const sc = SCALE[$("scaleSel").value];
   if (sc) lines.push(`A ${sc} is visible next to the food as a size reference.`);
   if (imgData2) lines.push("A second photo taken from a side angle is included to show the depth and height of the food.");
